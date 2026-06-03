@@ -11,6 +11,8 @@ jobs:
   build-vsix:
     name: Build VSIX
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
