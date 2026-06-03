@@ -1,0 +1,91 @@
+{
+  "name": "codex-oauth-lm-provider",
+  "displayName": "Codex OAuth LM Provider",
+  "description": "Experimental VS Code language model provider backed by the local Codex CLI ChatGPT OAuth session.",
+  "version": "0.0.1",
+  "publisher": "henrinc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/HenrINC/codex-oauth-lm-provider.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HenrINC/codex-oauth-lm-provider/issues"
+  },
+  "homepage": "https://github.com/HenrINC/codex-oauth-lm-provider#readme",
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:codexOAuthLmProvider.checkAuth",
+    "onCommand:codexOAuthLmProvider.listModels",
+    "onCommand:codexOAuthLmProvider.refreshModels"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexOAuthLmProvider.checkAuth",
+        "title": "Codex OAuth LM Provider: Check Auth"
+      },
+      {
+        "command": "codexOAuthLmProvider.listModels",
+        "title": "Codex OAuth LM Provider: List VS Code Models"
+      },
+      {
+        "command": "codexOAuthLmProvider.refreshModels",
+        "title": "Codex OAuth LM Provider: Refresh Codex Models"
+      }
+    ],
+    "configuration": {
+      "title": "Codex OAuth LM Provider",
+      "properties": {
+        "codexOAuthLmProvider.authFile": {
+          "type": "string",
+          "default": "~/.codex/auth.json",
+          "description": "Path to the Codex CLI auth file."
+        },
+        "codexOAuthLmProvider.endpoint": {
+          "type": "string",
+          "default": "https://chatgpt.com/backend-api/codex/responses",
+          "description": "Codex Responses endpoint."
+        },
+        "codexOAuthLmProvider.modelsEndpoint": {
+          "type": "string",
+          "default": "https://chatgpt.com/backend-api/codex/models",
+          "description": "Codex models endpoint used for automatic model provisioning."
+        },
+        "codexOAuthLmProvider.instructions": {
+          "type": "string",
+          "default": "You are a concise coding assistant.",
+          "description": "Instructions sent with every Codex request."
+        }
+      }
+    },
+    "languageModelChatProviders": [
+      {
+        "vendor": "openai-codex-oauth",
+        "displayName": "OpenAI Codex OAuth",
+        "managementCommand": "codexOAuthLmProvider.checkAuth"
+      }
+    ]
+  },
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "precompile": "npm run clean",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.120.0",
+    "@vscode/vsce": "^3.9.1",
+    "typescript": "^5.6.3"
+  }
+}
