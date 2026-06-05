@@ -24,6 +24,12 @@ export class CodexLanguageModelProvider implements vscode.LanguageModelChatProvi
     this.changeEmitter.fire();
   }
 
+  async reloadModels(): Promise<CodexLanguageModelChatInformation[]> {
+    const models = await this.models.reload();
+    this.changeEmitter.fire();
+    return models.flatMap(toVsCodeModels);
+  }
+
   dispose(): void {
     this.changeEmitter.dispose();
   }
@@ -54,19 +60,48 @@ export class CodexLanguageModelProvider implements vscode.LanguageModelChatProvi
       return estimateTokenCount(text);
     }
 
-    const joined = text.content.map((part) => {
-      if (part instanceof vscode.LanguageModelTextPart) {
-        return part.value;
-      }
-      return "";
-    }).join("\n");
-
-    return estimateTokenCount(joined);
+    return estimateTokenCount(requestMessageText(text));
   }
 }
 
 function estimateTokenCount(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function requestMessageText(message: vscode.LanguageModelChatRequestMessage): string {
+  return message.content
+    .map((part) => {
+      if (part instanceof vscode.LanguageModelTextPart) {
+        return part.value;
+      }
+
+      if (part instanceof vscode.LanguageModelToolCallPart) {
+        return JSON.stringify(part.input ?? {});
+      }
+
+      if (part instanceof vscode.LanguageModelToolResultPart) {
+        return part.content
+          .map(toolResultContentText)
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n");
+      }
+
+      return "";
+    })
+    .filter((value) => value.trim().length > 0)
+    .join("\n\n");
+}
+
+function toolResultContentText(content: unknown): string | undefined {
+  if (content instanceof vscode.LanguageModelTextPart) {
+    return content.value;
+  }
+
+  if (typeof content === "string") {
+    return content;
+  }
+
+  return undefined;
 }
 
 function toVsCodeModels(model: CodexModelInfo): CodexLanguageModelChatInformation[] {

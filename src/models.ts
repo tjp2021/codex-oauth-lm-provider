@@ -1,4 +1,5 @@
 import { CodexAuthManager } from "./auth";
+import { formatConnectionError, redactUrl } from "./connectionErrors";
 
 export type CodexModelInfo = {
   id: string;
@@ -49,6 +50,8 @@ type CodexApiModel = {
 };
 
 const DEFAULT_CLIENT_VERSION = "0.136.0";
+const MODEL_FETCH_TIMEOUT_MS = 10_000;
+const MAX_MODEL_FETCH_ATTEMPTS = 3;
 
 export class CodexModelRegistry {
   private cachedModels: CodexModelInfo[] | undefined;
@@ -65,10 +68,18 @@ export class CodexModelRegistry {
       return this.cachedModels;
     }
 
-    this.cachedModels = await this.fetchRemoteModels();
-    this.loadedAt = Date.now();
+    const models = await this.fetchRemoteModels();
+    if (models.length) {
+      this.cachedModels = models;
+      this.loadedAt = Date.now();
+    }
 
-    return this.cachedModels;
+    return models.length ? models : this.cachedModels ?? [];
+  }
+
+  async reload(): Promise<CodexModelInfo[]> {
+    this.refresh();
+    return this.getModels();
   }
 
   refresh(): void {
@@ -77,13 +88,34 @@ export class CodexModelRegistry {
   }
 
   private async fetchRemoteModels(): Promise<CodexModelInfo[]> {
+    for (let attempt = 1; attempt <= MAX_MODEL_FETCH_ATTEMPTS; attempt += 1) {
+      const models = await this.fetchRemoteModelsOnce(attempt);
+      if (models) {
+        return models;
+      }
+
+      if (attempt < MAX_MODEL_FETCH_ATTEMPTS) {
+        await sleep(attempt * 500);
+      }
+    }
+
+    this.log(`models: Codex API fetch gave up after ${MAX_MODEL_FETCH_ATTEMPTS} attempt(s)`);
+    return [];
+  }
+
+  private async fetchRemoteModelsOnce(attempt: number): Promise<CodexModelInfo[] | undefined> {
     const startedAt = Date.now();
     const url = new URL(this.endpoint);
     url.searchParams.set("client_version", DEFAULT_CLIENT_VERSION);
+    const abort = new AbortController();
+    const timeout = setTimeout(() => {
+      abort.abort(new Error(`Timed out waiting ${MODEL_FETCH_TIMEOUT_MS}ms for Codex models.`));
+    }, MODEL_FETCH_TIMEOUT_MS);
 
     try {
       const session = await this.auth.getSession();
       const response = await fetch(url, {
+        signal: abort.signal,
         headers: {
           "accept": "application/json",
           "authorization": `Bearer ${session.accessToken}`,
@@ -92,19 +124,20 @@ export class CodexModelRegistry {
       });
 
       if (!response.ok) {
-        this.log(`models: Codex API fetch failed; status=${response.status}; durationMs=${Date.now() - startedAt}`);
-        return [];
+        this.log(`models: Codex API fetch attempt ${attempt}/${MAX_MODEL_FETCH_ATTEMPTS} failed; status=${response.status}; statusText=${response.statusText}; durationMs=${Date.now() - startedAt}; url=${redactUrl(url)}`);
+        return undefined;
       }
 
       const body = await response.json() as CodexModelsResponse;
       const models = this.modelsFromApi(body);
 
-      this.log(`models: Codex API loaded ${models.length} visible API model(s); clientVersion=${DEFAULT_CLIENT_VERSION}; durationMs=${Date.now() - startedAt}; ids=${models.map((model) => model.id).join(",") || "none"}`);
+      this.log(`models: Codex API loaded ${models.length} visible API model(s); attempt=${attempt}/${MAX_MODEL_FETCH_ATTEMPTS}; clientVersion=${DEFAULT_CLIENT_VERSION}; durationMs=${Date.now() - startedAt}; ids=${models.map((model) => model.id).join(",") || "none"}`);
       return models;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log(`models: Codex API fetch failed; error=${message}; durationMs=${Date.now() - startedAt}`);
-      return [];
+      this.log(`models: Codex API fetch attempt ${attempt}/${MAX_MODEL_FETCH_ATTEMPTS} failed; error=${formatConnectionError(error)}; durationMs=${Date.now() - startedAt}; url=${redactUrl(url)}`);
+      return undefined;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -169,6 +202,10 @@ function stringArray(value: unknown): string[] | undefined {
 
   const strings = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
   return strings.length ? strings : undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeReasoningEfforts(value: unknown): CodexReasoningEffort[] | undefined {

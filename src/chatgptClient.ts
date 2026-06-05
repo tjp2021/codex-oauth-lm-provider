@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { CodexAuthManager } from "./auth";
+import { formatConnectionError, safeResponsePreview } from "./connectionErrors";
 
 type ResponsesInputItem = {
   type: "message";
@@ -98,7 +99,7 @@ export class ChatGptCodexClient {
 
       this.log(`request ${requestId}: Codex API responded; status=${response.status}; durationMs=${Date.now() - startedAt}`);
       if (!response.ok) {
-        throw new Error(`Codex backend returned HTTP ${response.status}: ${await safeErrorPreview(response)}`);
+        throw new Error(`Codex backend returned HTTP ${response.status}: ${await safeResponsePreview(response)}`);
       }
       if (!response.body) {
         throw new Error("Codex backend returned an empty response body.");
@@ -133,7 +134,7 @@ export class ChatGptCodexClient {
       }
     } catch (error) {
       if (!token.isCancellationRequested) {
-        this.log(`request ${requestId}: failed; durationMs=${Date.now() - startedAt}; error=${formatFetchError(error, timedOutBeforeHeaders)}`);
+        this.log(`request ${requestId}: failed; durationMs=${Date.now() - startedAt}; error=${formatResponseFetchError(error, timedOutBeforeHeaders)}`);
         throw error;
       }
     } finally {
@@ -493,11 +494,6 @@ function stringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-async function safeErrorPreview(response: Response): Promise<string> {
-  const text = await response.text();
-  return redact(text.slice(0, 400));
-}
-
 function normalizeHeaderTimeoutMs(value: number): number {
   if (!Number.isFinite(value) || value < 0) {
     return 45_000;
@@ -505,58 +501,11 @@ function normalizeHeaderTimeoutMs(value: number): number {
   return Math.floor(value);
 }
 
-function formatFetchError(error: unknown, timedOutBeforeHeaders: boolean): string {
-  const parts = errorChain(error);
-  if (timedOutBeforeHeaders) {
-    parts.unshift("HeaderTimeoutError: timed out before Codex response headers arrived");
-  }
-  return redact(parts.join("; caused by: "));
-}
-
-function errorChain(error: unknown): string[] {
-  const parts: string[] = [];
-  let current: unknown = error;
-
-  while (current) {
-    if (current instanceof Error) {
-      parts.push(errorSummary(current));
-      current = (current as { cause?: unknown }).cause;
-      continue;
-    }
-
-    parts.push(String(current));
-    break;
-  }
-
-  return parts.length ? parts : ["Unknown error"];
-}
-
-function errorSummary(error: Error): string {
-  const details = [
-    `name=${error.name}`,
-    error.message ? `message=${error.message}` : undefined,
-    stringProperty(error, "code") ? `code=${stringProperty(error, "code")}` : undefined,
-    stringProperty(error, "errno") ? `errno=${stringProperty(error, "errno")}` : undefined,
-    stringProperty(error, "syscall") ? `syscall=${stringProperty(error, "syscall")}` : undefined,
-    stringProperty(error, "hostname") ? `hostname=${stringProperty(error, "hostname")}` : undefined
-  ].filter(Boolean);
-
-  return details.join(" ");
-}
-
-function stringProperty(value: object, key: string): string | undefined {
-  const property = (value as Record<string, unknown>)[key];
-  if (typeof property === "string" || typeof property === "number") {
-    return String(property);
-  }
-  return undefined;
-}
-
-function redact(value: string): string {
-  return value
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [redacted]")
-    .replace(/"access_token"\s*:\s*"[^"]+"/g, "\"access_token\":\"[redacted]\"")
-    .replace(/"refresh_token"\s*:\s*"[^"]+"/g, "\"refresh_token\":\"[redacted]\"");
+function formatResponseFetchError(error: unknown, timedOutBeforeHeaders: boolean): string {
+  return formatConnectionError(
+    error,
+    timedOutBeforeHeaders ? ["HeaderTimeoutError: timed out before Codex response headers arrived"] : []
+  );
 }
 
 function createRequestId(): string {

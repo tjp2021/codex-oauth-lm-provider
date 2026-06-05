@@ -42,6 +42,7 @@ export class CodexAuthManager {
   ) {}
 
   async getSession(): Promise<CodexSession> {
+    const startedAt = Date.now();
     this.log(`auth: reading Codex auth file at ${this.authFilePath}`);
     const auth = await this.readAuthFile();
     const tokens = auth.tokens;
@@ -55,10 +56,11 @@ export class CodexAuthManager {
       return this.refresh(auth);
     }
 
-    this.log(`auth: using cached access token; account=${this.extractAccountId(auth) ? "present" : "unknown"}`);
+    const accountId = this.extractAccountId(auth);
+    this.log(`auth: using cached access token; account=${accountId ? "present" : "unknown"}; durationMs=${Date.now() - startedAt}`);
     return {
       accessToken: tokens.access_token,
-      accountId: this.extractAccountId(auth)
+      accountId
     };
   }
 

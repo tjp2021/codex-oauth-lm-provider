@@ -52,11 +52,16 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }),
     vscode.commands.registerCommand("codexOAuthLmProvider.refreshModels", async () => {
-      provider.refreshModels();
-      const models = await vscode.lm.selectChatModels({ vendor: VENDOR_ID });
-      log(`command refreshModels: VS Code returned ${models.length} model(s): ${models.map((model) => model.id).join(",") || "none"}`);
+      const models = await provider.reloadModels();
+      const visibleModels = await vscode.lm.selectChatModels({ vendor: VENDOR_ID });
+      log(`command refreshModels: reloaded ${models.length} provider model variant(s); VS Code returned ${visibleModels.length} model(s): ${visibleModels.map((model) => model.id).join(",") || "none"}`);
+      if (!models.length) {
+        vscode.window.showWarningMessage("Codex OAuth model refresh failed after 3 attempts. See the Codex OAuth LM Provider output for details.");
+        return;
+      }
+
       vscode.window.showInformationMessage(
-        `Codex OAuth models refreshed: ${models.map((model) => model.id).join(", ") || "no models visible"}`
+        `Codex OAuth models refreshed: ${models.map((model) => model.id).join(", ")}`
       );
     })
   );
