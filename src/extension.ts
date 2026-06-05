@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext): void {
   log("extension: activating");
   const auth = new CodexAuthManager(getAuthFilePath(), log);
   const models = new CodexModelRegistry(auth, getModelsEndpoint(), log);
-  const client = new ChatGptCodexClient(auth, getEndpoint(), getInstructions, output);
+  const client = new ChatGptCodexClient(auth, getEndpoint(), getInstructions, getRequestHeaderTimeoutMs, output);
   const provider = new CodexLanguageModelProvider(client, models);
 
   context.subscriptions.push(
@@ -78,6 +78,10 @@ function getInstructions(): string {
 
 function getModelsEndpoint(): string {
   return getConfig().get("modelsEndpoint", DEFAULT_CODEX_MODELS_ENDPOINT);
+}
+
+function getRequestHeaderTimeoutMs(): number {
+  return getConfig().get("requestHeaderTimeoutMs", 45_000);
 }
 
 function getConfig(): vscode.WorkspaceConfiguration {

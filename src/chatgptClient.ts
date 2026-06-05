@@ -34,6 +34,7 @@ export class ChatGptCodexClient {
     private readonly auth: CodexAuthManager,
     private readonly endpoint: string,
     private readonly getInstructions: () => string,
+    private readonly getRequestHeaderTimeoutMs: () => number,
     private readonly output: vscode.OutputChannel
   ) {}
 
@@ -49,6 +50,8 @@ export class ChatGptCodexClient {
     const requestId = createRequestId();
     const session = await this.auth.getSession();
     const abort = new AbortController();
+    let headerTimeout: NodeJS.Timeout | undefined;
+    let timedOutBeforeHeaders = false;
     const abortSubscription = token.onCancellationRequested(() => abort.abort());
     const input = toResponsesInput(messages);
     const translated = summarizeInput(input);
@@ -61,6 +64,14 @@ export class ChatGptCodexClient {
     this.log(`request ${requestId}: sending model=${modelId}; reasoningEffort=${reasoningEffort ?? "default"}; instructionsChars=${instructions.length}; tools=${tools.length}; toolMode=${options.toolMode}; account=${session.accountId ? "present" : "unknown"}`);
 
     try {
+      const headerTimeoutMs = normalizeHeaderTimeoutMs(this.getRequestHeaderTimeoutMs());
+      if (headerTimeoutMs > 0) {
+        headerTimeout = setTimeout(() => {
+          timedOutBeforeHeaders = true;
+          abort.abort(new Error(`Timed out waiting ${headerTimeoutMs}ms for Codex response headers.`));
+        }, headerTimeoutMs);
+      }
+
       const response = await fetch(this.endpoint, {
         method: "POST",
         signal: abort.signal,
@@ -80,6 +91,10 @@ export class ChatGptCodexClient {
           store: false
         })
       });
+      if (headerTimeout) {
+        clearTimeout(headerTimeout);
+        headerTimeout = undefined;
+      }
 
       this.log(`request ${requestId}: Codex API responded; status=${response.status}; durationMs=${Date.now() - startedAt}`);
       if (!response.ok) {
@@ -118,10 +133,13 @@ export class ChatGptCodexClient {
       }
     } catch (error) {
       if (!token.isCancellationRequested) {
-        this.log(`request ${requestId}: failed; durationMs=${Date.now() - startedAt}; error=${redact(String(error))}`);
+        this.log(`request ${requestId}: failed; durationMs=${Date.now() - startedAt}; error=${formatFetchError(error, timedOutBeforeHeaders)}`);
         throw error;
       }
     } finally {
+      if (headerTimeout) {
+        clearTimeout(headerTimeout);
+      }
       abortSubscription.dispose();
     }
   }
@@ -478,6 +496,60 @@ function stringValue(value: unknown): string | undefined {
 async function safeErrorPreview(response: Response): Promise<string> {
   const text = await response.text();
   return redact(text.slice(0, 400));
+}
+
+function normalizeHeaderTimeoutMs(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    return 45_000;
+  }
+  return Math.floor(value);
+}
+
+function formatFetchError(error: unknown, timedOutBeforeHeaders: boolean): string {
+  const parts = errorChain(error);
+  if (timedOutBeforeHeaders) {
+    parts.unshift("HeaderTimeoutError: timed out before Codex response headers arrived");
+  }
+  return redact(parts.join("; caused by: "));
+}
+
+function errorChain(error: unknown): string[] {
+  const parts: string[] = [];
+  let current: unknown = error;
+
+  while (current) {
+    if (current instanceof Error) {
+      parts.push(errorSummary(current));
+      current = (current as { cause?: unknown }).cause;
+      continue;
+    }
+
+    parts.push(String(current));
+    break;
+  }
+
+  return parts.length ? parts : ["Unknown error"];
+}
+
+function errorSummary(error: Error): string {
+  const details = [
+    `name=${error.name}`,
+    error.message ? `message=${error.message}` : undefined,
+    stringProperty(error, "code") ? `code=${stringProperty(error, "code")}` : undefined,
+    stringProperty(error, "errno") ? `errno=${stringProperty(error, "errno")}` : undefined,
+    stringProperty(error, "syscall") ? `syscall=${stringProperty(error, "syscall")}` : undefined,
+    stringProperty(error, "hostname") ? `hostname=${stringProperty(error, "hostname")}` : undefined
+  ].filter(Boolean);
+
+  return details.join(" ");
+}
+
+function stringProperty(value: object, key: string): string | undefined {
+  const property = (value as Record<string, unknown>)[key];
+  if (typeof property === "string" || typeof property === "number") {
+    return String(property);
+  }
+  return undefined;
 }
 
 function redact(value: string): string {

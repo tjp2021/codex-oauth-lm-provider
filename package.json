@@ -63,6 +63,12 @@
           "type": "string",
           "default": "You are a concise coding assistant.",
           "description": "Instructions sent with every Codex request."
+        },
+        "codexOAuthLmProvider.requestHeaderTimeoutMs": {
+          "type": "number",
+          "default": 45000,
+          "minimum": 0,
+          "description": "Milliseconds to wait for Codex response headers before aborting a request. Set to 0 to disable the extension-level header timeout; streaming is not timed out after headers arrive."
         }
       }
     },
