@@ -2,10 +2,14 @@ import * as vscode from "vscode";
 import { CodexAuthManager } from "./auth";
 import { formatConnectionError, safeResponsePreview } from "./connectionErrors";
 
+type ResponsesMessageContent =
+  | { type: "input_text" | "output_text"; text: string }
+  | { type: "input_image"; image_url: string };
+
 type ResponsesInputItem = {
   type: "message";
   role: "system" | "user" | "assistant";
-  content: Array<{ type: "input_text" | "output_text"; text: string }>;
+  content: ResponsesMessageContent[];
 } | {
   type: "function_call";
   call_id: string;
@@ -150,14 +154,18 @@ export class ChatGptCodexClient {
   }
 }
 
+type PendingMessagePart =
+  | { kind: "text"; text: string }
+  | { kind: "image"; dataUrl: string };
+
 function toResponsesInput(messages: readonly vscode.LanguageModelChatRequestMessage[]): ResponsesInputItem[] {
   return messages.flatMap((message) => {
     const items: ResponsesInputItem[] = [];
-    const textParts: string[] = [];
+    const pendingParts: PendingMessagePart[] = [];
 
     for (const part of message.content) {
       if (part instanceof vscode.LanguageModelToolCallPart) {
-        flushTextMessage(items, message.role, textParts);
+        flushMessage(items, message.role, pendingParts);
         items.push({
           type: "function_call",
           call_id: part.callId,
@@ -168,7 +176,7 @@ function toResponsesInput(messages: readonly vscode.LanguageModelChatRequestMess
       }
 
       if (part instanceof vscode.LanguageModelToolResultPart) {
-        flushTextMessage(items, message.role, textParts);
+        flushMessage(items, message.role, pendingParts);
         items.push({
           type: "function_call_output",
           call_id: part.callId,
@@ -177,33 +185,63 @@ function toResponsesInput(messages: readonly vscode.LanguageModelChatRequestMess
         continue;
       }
 
+      const imageDataUrl = imageDataUrlFromPart(part);
+      if (imageDataUrl) {
+        pendingParts.push({ kind: "image", dataUrl: imageDataUrl });
+        continue;
+      }
+
       const text = textFromPart(part);
       if (text?.trim()) {
-        textParts.push(text);
+        pendingParts.push({ kind: "text", text });
       }
     }
 
-    flushTextMessage(items, message.role, textParts);
+    flushMessage(items, message.role, pendingParts);
     return items;
   });
 }
 
-function flushTextMessage(items: ResponsesInputItem[], roleValue: unknown, textParts: string[]): void {
-  const text = textParts.join("\n\n");
-  textParts.length = 0;
-  if (!text.trim()) {
+function flushMessage(items: ResponsesInputItem[], roleValue: unknown, pendingParts: PendingMessagePart[]): void {
+  const parts = pendingParts.splice(0, pendingParts.length);
+  const role = toResponsesRole(roleValue);
+  const content: ResponsesMessageContent[] = [];
+
+  for (const part of parts) {
+    if (part.kind === "image") {
+      // The Responses API only accepts input_image on user messages.
+      if (role === "user") {
+        content.push({ type: "input_image", image_url: part.dataUrl });
+      }
+      continue;
+    }
+    content.push({
+      type: role === "assistant" ? "output_text" : "input_text",
+      text: part.text
+    });
+  }
+
+  if (!content.length) {
     return;
   }
 
-  const role = toResponsesRole(roleValue);
-  items.push({
-    type: "message",
-    role,
-    content: [{
-      type: role === "assistant" ? "output_text" : "input_text",
-      text
-    }]
-  });
+  items.push({ type: "message", role, content });
+}
+
+function imageDataUrlFromPart(part: unknown): string | undefined {
+  // LanguageModelDataPart carries chat attachments (images) in the LM provider API.
+  const DataPart = (vscode as unknown as { LanguageModelDataPart?: new (...args: never[]) => unknown }).LanguageModelDataPart;
+  if (!DataPart || !(part instanceof DataPart)) {
+    return undefined;
+  }
+  const dataPart = part as unknown as { mimeType?: string; data?: Uint8Array };
+  if (typeof dataPart.mimeType !== "string" || !dataPart.mimeType.startsWith("image/")) {
+    return undefined;
+  }
+  if (!(dataPart.data instanceof Uint8Array) || dataPart.data.length === 0) {
+    return undefined;
+  }
+  return `data:${dataPart.mimeType};base64,${Buffer.from(dataPart.data).toString("base64")}`;
 }
 
 function toResponsesRole(role: unknown): "system" | "user" | "assistant" {
@@ -224,7 +262,7 @@ function summarizeInput(input: ResponsesInputItem[]): { chars: number; roles: st
   for (const item of input) {
     if (item.type === "message") {
       counts.set(item.role, (counts.get(item.role) ?? 0) + 1);
-      chars += item.content.reduce((total, part) => total + part.text.length, 0);
+      chars += item.content.reduce((total, part) => total + (part.type === "input_image" ? part.image_url.length : part.text.length), 0);
       continue;
     }
     counts.set(item.type, (counts.get(item.type) ?? 0) + 1);
